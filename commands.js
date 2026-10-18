@@ -1,10 +1,7 @@
 // Command prefix (a!play, a!p, a!skip, a!s, dst.)
 const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, PermissionFlagsBits } = require('discord.js');
-const cfg = require('./config');
-const store = require('./store');
-const M = require('./music');
-
-const { fmt, durOf, COLOR } = M;
+const { fmt, durOf, COLOR } = require('./music');
+const router = require('./router');
 const LOOP_LABEL = { off: 'mati', track: 'lagu ini', queue: 'seluruh queue' };
 const LOOP_ORDER = ['off', 'track', 'queue'];
 const LOOP_INPUT = {
@@ -32,7 +29,7 @@ function parseTime(s) {
 
 // Player aktif + user harus di voice channel yang sama. Mengembalikan player atau null (sudah membalas).
 async function needPlayer(c) {
-  const p = M.getPlayer(c.guild.id);
+  const p = c.music.getPlayer(c.guild.id);
   if (!p || !p.queue.current) {
     await c.reply('❌ Tidak ada lagu yang sedang diputar.');
     return null;
@@ -46,22 +43,22 @@ async function needPlayer(c) {
 
 // ------------------------------------------------------------------ play / join / leave / 24-7
 def(
-  { name: 'play', aliases: ['p'], usage: '<judul / link>', desc: 'Putar lagu (YouTube / link / playlist)' },
+  { name: 'play', kind: 'summon', aliases: ['p'], usage: '<judul / link>', desc: 'Putar lagu (YouTube / link / playlist)' },
   async (c) => {
     const query = c.args.join(' ').trim();
     if (!c.vc) return c.reply('❌ Masuk ke voice channel dulu.');
-    if (!query) return c.reply(`Pakai: \`${cfg.prefix}play <judul / link>\``);
+    if (!query) return c.reply(`Pakai: \`${c.prefix}play <judul / link>\``);
     if (!c.vc.joinable || !c.vc.speakable) return c.reply('❌ Bot tidak punya izin **Connect / Speak** di voice channel itu.');
-    if (!M.isReady()) return c.reply('❌ Server Lavalink belum terhubung, coba lagi sebentar.');
+    if (!c.music.isReady()) return c.reply('❌ Server Lavalink belum terhubung, coba lagi sebentar.');
 
-    const existing = M.getPlayer(c.guild.id);
+    const existing = c.music.getPlayer(c.guild.id);
     if (existing?.connected && existing.queue.current && existing.voiceChannelId !== c.vc.id) {
       return c.reply('❌ Bot sedang memutar musik di voice channel lain.');
     }
 
     c.message.channel.sendTyping().catch(() => {});
     try {
-      const player = await M.getOrCreatePlayer(c.guild.id, c.vc.id, c.message.channelId);
+      const player = await c.music.getOrCreatePlayer(c.guild.id, c.vc.id, c.message.channelId);
       const res = await player.search({ query }, c.message.author);
       if (res.loadType === 'error') return c.reply(`❌ Tidak bisa memutar: \`${String(res.exception?.message || 'error').slice(0, 200)}\``);
       if (res.loadType === 'empty' || !res.tracks.length) return c.reply('❌ Tidak ada hasil.');
@@ -84,40 +81,40 @@ def(
   }
 );
 
-def({ name: 'join', aliases: ['j', 'summon'], desc: 'Panggil bot ke voice channel kamu' }, async (c) => {
+def({ name: 'join', kind: 'summon', aliases: ['j', 'summon'], desc: 'Panggil bot ke voice channel kamu' }, async (c) => {
   if (!c.vc) return c.reply('❌ Masuk ke voice channel dulu.');
   if (!c.vc.joinable || !c.vc.speakable) return c.reply('❌ Bot tidak punya izin **Connect / Speak** di voice channel itu.');
-  if (!M.isReady()) return c.reply('❌ Server Lavalink belum terhubung, coba lagi sebentar.');
-  const existing = M.getPlayer(c.guild.id);
+  if (!c.music.isReady()) return c.reply('❌ Server Lavalink belum terhubung, coba lagi sebentar.');
+  const existing = c.music.getPlayer(c.guild.id);
   if (existing?.queue.current && existing.voiceChannelId !== c.vc.id) return c.reply('❌ Bot sedang memutar musik di voice channel lain.');
-  const p = await M.getOrCreatePlayer(c.guild.id, c.vc.id, c.message.channelId);
-  if (store.getVc(c.guild.id)) store.setVc(c.guild.id, c.vc.id);
-  else if (!p.queue.current) M.armIdle(c.guild.id);
+  const p = await c.music.getOrCreatePlayer(c.guild.id, c.vc.id, c.message.channelId);
+  if (c.store.getVc(c.guild.id)) c.store.setVc(c.guild.id, c.vc.id);
+  else if (!p.queue.current) c.music.armIdle(c.guild.id);
   return c.reply(`✅ Masuk ke **${c.vc.name}**.`);
 });
 
 def({ name: 'leave', aliases: ['dc', 'disconnect', 'stopbot'], desc: 'Keluarkan bot dari voice' }, async (c) => {
-  store.clearVc(c.guild.id); // hapus dulu supaya tidak masuk ulang otomatis
-  const p = M.getPlayer(c.guild.id);
+  c.store.clearVc(c.guild.id); // hapus dulu supaya tidak masuk ulang otomatis
+  const p = c.music.getPlayer(c.guild.id);
   if (!p) return c.reply('Bot tidak sedang di voice.');
   await p.destroy('leave command').catch(() => {});
   return c.reply('👋 Bot keluar dari voice.');
 });
 
-def({ name: '247', aliases: ['24/7', 'stay'], desc: 'Aktif/nonaktifkan mode 24/7 (bot tidak keluar sendiri)' }, async (c) => {
+def({ name: '247', kind: 'summon', aliases: ['24/7', 'stay'], desc: 'Aktif/nonaktifkan mode 24/7 (bot tidak keluar sendiri)' }, async (c) => {
   if (!c.member.permissions.has(PermissionFlagsBits.ManageGuild)) return c.reply('❌ Butuh izin **Manage Server** untuk mengatur mode 24/7.');
-  if (store.getVc(c.guild.id)) {
-    store.clearVc(c.guild.id);
-    return c.reply('🔕 Mode 24/7 **nonaktif**. Bot akan keluar sendiri kalau nganggur.');
+  if (!c.vc) return c.reply('❌ Masuk ke voice channel bot dulu, lalu jalankan lagi.');
+  if (c.store.getVc(c.guild.id)) {
+    c.store.clearVc(c.guild.id);
+    return c.reply('🔕 Mode 24/7 **nonaktif** untuk bot ini. Bot akan keluar sendiri kalau nganggur.');
   }
-  if (!c.vc) return c.reply('❌ Masuk ke voice channel dulu, lalu jalankan lagi.');
   if (!c.vc.joinable || !c.vc.speakable) return c.reply('❌ Bot tidak punya izin **Connect / Speak** di voice channel itu.');
-  if (!M.isReady()) return c.reply('❌ Server Lavalink belum terhubung, coba lagi sebentar.');
-  const existing = M.getPlayer(c.guild.id);
+  if (!c.music.isReady()) return c.reply('❌ Server Lavalink belum terhubung, coba lagi sebentar.');
+  const existing = c.music.getPlayer(c.guild.id);
   if (existing?.queue.current && existing.voiceChannelId !== c.vc.id) return c.reply('❌ Bot sedang memutar musik di voice channel lain.');
-  await M.getOrCreatePlayer(c.guild.id, c.vc.id, c.message.channelId);
-  store.setVc(c.guild.id, c.vc.id);
-  return c.reply(`🔔 Mode 24/7 **aktif** di **${c.vc.name}**. Pakai \`${cfg.prefix}leave\` untuk mengeluarkan bot.`);
+  await c.music.getOrCreatePlayer(c.guild.id, c.vc.id, c.message.channelId);
+  c.store.setVc(c.guild.id, c.vc.id);
+  return c.reply(`🔔 Mode 24/7 **aktif** di **${c.vc.name}**. Pakai \`${c.prefix}leave\` untuk mengeluarkan bot.`);
 });
 
 // ------------------------------------------------------------------ kontrol playback
@@ -125,12 +122,12 @@ def({ name: 'skip', aliases: ['s', 'next'], desc: 'Lewati lagu sekarang' }, asyn
   const p = await needPlayer(c);
   if (!p) return;
   if (!p.queue.tracks.length) {
-    if (p.get('autoplay') && (await M.doAutoplay(p).catch(() => false))) {
+    if (p.get('autoplay') && (await c.music.doAutoplay(p).catch(() => false))) {
       await p.skip();
       return c.reply('⏭️ Dilewati.');
     }
     await p.stopPlaying(true, false);
-    M.armIdle(c.guild.id);
+    c.music.armIdle(c.guild.id);
     return c.reply('⏭️ Lagu terakhir dilewati. Queue kosong.');
   }
   await p.skip();
@@ -153,7 +150,7 @@ def({ name: 'stop', aliases: ['clearstop'], desc: 'Hentikan musik & kosongkan qu
   if (!p) return;
   p.set('autoplay', false);
   await p.stopPlaying(true, false);
-  M.armIdle(c.guild.id);
+  c.music.armIdle(c.guild.id);
   return c.reply('⏹️ Musik dihentikan & queue dikosongkan.');
 });
 
@@ -217,7 +214,7 @@ def({ name: 'seek', usage: '<detik | m:ss>', desc: 'Loncat ke posisi tertentu' }
   if (!p) return;
   if (!p.queue.current.info.isSeekable) return c.reply('❌ Lagu ini tidak bisa di-seek.');
   const s = c.args[0] ? parseTime(c.args[0]) : null;
-  if (s == null) return c.reply(`Pakai: \`${cfg.prefix}seek 90\` atau \`${cfg.prefix}seek 1:30\``);
+  if (s == null) return c.reply(`Pakai: \`${c.prefix}seek 90\` atau \`${c.prefix}seek 1:30\``);
   await p.seek(s * 1000);
   return c.reply(`⏩ Loncat ke **${fmt(s * 1000)}**`);
 });
@@ -226,7 +223,7 @@ def({ name: 'remove', aliases: ['rm'], usage: '<nomor>', desc: 'Hapus lagu dari 
   const p = await needPlayer(c);
   if (!p) return;
   const n = parseInt(c.args[0], 10);
-  if (Number.isNaN(n) || n < 2) return c.reply(`Pakai: \`${cfg.prefix}remove <nomor>\` (nomor dari \`${cfg.prefix}queue\`, mulai 2)`);
+  if (Number.isNaN(n) || n < 2) return c.reply(`Pakai: \`${c.prefix}remove <nomor>\` (nomor dari \`${c.prefix}queue\`, mulai 2)`);
   const track = p.queue.tracks[n - 2]; // nomor 1 = lagu yang sedang diputar
   if (!track) return c.reply('❌ Nomor tidak ada di queue.');
   await p.queue.remove(n - 2);
@@ -279,7 +276,7 @@ function queuePage(p, wanted) {
 }
 
 def({ name: 'queue', aliases: ['q'], desc: 'Lihat antrean lagu' }, async (c) => {
-  const p = M.getPlayer(c.guild.id);
+  const p = c.music.getPlayer(c.guild.id);
   if (!p?.queue.current) return c.reply('📭 Queue kosong.');
 
   const first = queuePage(p, 0);
@@ -290,20 +287,20 @@ def({ name: 'queue', aliases: ['q'], desc: 'Lihat antrean lagu' }, async (c) => 
   const collector = msg.createMessageComponentCollector({ time: 120000 });
   collector.on('collect', async (b) => {
     if (b.user.id !== c.message.author.id) {
-      return b.reply({ content: `Hanya yang menjalankan \`${cfg.prefix}queue\` yang bisa ganti halaman.`, ephemeral: true }).catch(() => {});
+      return b.reply({ content: `Hanya yang menjalankan \`${c.prefix}queue\` yang bisa ganti halaman.`, ephemeral: true }).catch(() => {});
     }
     const target = { mq_first: 0, mq_prev: page - 1, mq_next: page + 1, mq_last: Infinity }[b.customId];
     if (target === undefined) return;
-    const r = queuePage(M.getPlayer(c.guild.id), target);
+    const r = queuePage(c.music.getPlayer(c.guild.id), target);
     page = r.page;
     await b.update({ ...r.payload, allowedMentions: { parse: [] } }).catch(() => {});
-    if (!M.getPlayer(c.guild.id)?.queue.current) collector.stop();
+    if (!c.music.getPlayer(c.guild.id)?.queue.current) collector.stop();
   });
   collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
 });
 
 def({ name: 'nowplaying', aliases: ['np'], desc: 'Lagu yang sedang diputar' }, async (c) => {
-  const p = M.getPlayer(c.guild.id);
+  const p = c.music.getPlayer(c.guild.id);
   const t = p?.queue.current;
   if (!t) return c.reply('❌ Tidak ada lagu yang sedang diputar.');
   const e = new EmbedBuilder()
@@ -315,52 +312,66 @@ def({ name: 'nowplaying', aliases: ['np'], desc: 'Lagu yang sedang diputar' }, a
   return c.reply({ embeds: [e] });
 });
 
-def({ name: 'help', aliases: ['h', 'commands'], desc: 'Daftar command' }, async (c) => {
+def({ name: 'help', kind: 'info', aliases: ['h', 'commands'], desc: 'Daftar command' }, async (c) => {
   const lines = list.map((cmd) => {
-    const names = [cmd.name, ...(cmd.aliases || [])].map((n) => `\`${cfg.prefix}${n}\``).join(' / ');
+    const names = [cmd.name, ...(cmd.aliases || [])].map((n) => `\`${c.prefix}${n}\``).join(' / ');
     return `${names}${cmd.usage ? ` \`${cmd.usage}\`` : ''}\n└ ${cmd.desc}`;
   });
-  const e = new EmbedBuilder().setColor(COLOR).setTitle('🎵 Command Musik').setDescription(lines.join('\n'));
+  const e = new EmbedBuilder().setColor(COLOR).setTitle('🎵 Command Musik').setDescription(lines.join('\n'))
+    .setFooter({ text: 'Ada beberapa bot musik dengan prefix yang sama: bot yang sedang bebas dipakai otomatis.' });
   return c.reply({ embeds: [e] });
 });
 
-// ------------------------------------------------------------------ handler pesan
-async function handleMessage(message) {
-  if (message.author.bot || !message.guild) return;
-  const content = message.content;
-  const prefix = cfg.prefix;
-  if (!content.toLowerCase().startsWith(prefix.toLowerCase())) return;
+// ------------------------------------------------------------------ handler pesan (satu per bot)
+function createHandler(bot, music, store) {
+  const prefix = bot.prefix;
 
-  const args = content.slice(prefix.length).trim().split(/\s+/).filter(Boolean);
-  const name = (args.shift() || '').toLowerCase();
-  const cmd = commands.get(name);
-  if (!cmd) return;
+  return async function handleMessage(message) {
+    if (message.author.bot || !message.guild) return;
+    if (!message.content.toLowerCase().startsWith(prefix.toLowerCase())) return;
 
-  const me = message.guild.members.me;
-  if (!message.channel.permissionsFor(me)?.has(PermissionFlagsBits.SendMessages)) return;
+    const args = message.content.slice(prefix.length).trim().split(/\s+/).filter(Boolean);
+    const name = (args.shift() || '').toLowerCase();
+    const cmd = commands.get(name);
+    if (!cmd) return;
 
-  const c = {
-    message,
-    guild: message.guild,
-    member: message.member,
-    args,
-    vc: message.member?.voice?.channel || null,
-    reply: (payload) =>
-      message
-        .reply({
-          allowedMentions: { parse: [], repliedUser: false },
-          failIfNotExists: false,
-          ...(typeof payload === 'string' ? { content: payload } : payload),
-        })
-        .catch((err) => console.warn('[reply] gagal:', err.message)),
+    // Semua bot menerima pesan yang sama; router memilih satu bot saja yang menjawab
+    const decision = router.decide(message, cmd);
+    if (decision.botId !== bot.id) return;
+
+    const me = message.guild.members.me;
+    if (!message.channel.permissionsFor(me)?.has(PermissionFlagsBits.SendMessages)) return;
+
+    const c = {
+      message,
+      guild: message.guild,
+      member: message.member,
+      args,
+      prefix,
+      music,
+      store,
+      vc: message.member?.voice?.channel || null,
+      reply: (payload) =>
+        message
+          .reply({
+            allowedMentions: { parse: [], repliedUser: false },
+            failIfNotExists: false,
+            ...(typeof payload === 'string' ? { content: payload } : payload),
+          })
+          .catch((err) => console.warn(`[${bot.name}] reply gagal:`, err.message)),
+    };
+
+    if (decision.allBusy) {
+      return c.reply('❌ Semua bot musik di server ini sedang dipakai di voice channel lain. Tunggu sampai ada yang selesai, atau undang bot musik lainnya.');
+    }
+
+    try {
+      await cmd.execute(c);
+    } catch (err) {
+      console.error(`[${bot.name}] command ${name} error:`, err);
+      c.reply('❌ Terjadi error. Coba lagi sebentar lagi.');
+    }
   };
-
-  try {
-    await cmd.execute(c);
-  } catch (err) {
-    console.error(`[command:${name}] error:`, err);
-    c.reply('❌ Terjadi error. Coba lagi sebentar lagi.');
-  }
 }
 
-module.exports = { handleMessage };
+module.exports = { createHandler };

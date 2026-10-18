@@ -1,4 +1,4 @@
-// Penyimpanan kecil (JSON) untuk mode 24/7 per server: { [guildId]: { vc: channelId } }
+// Penyimpanan kecil (JSON) untuk mode 24/7: { [botId]: { [guildId]: { vc: channelId } } }
 const fs = require('fs');
 const path = require('path');
 const cfg = require('./config');
@@ -17,19 +17,22 @@ function save() {
   }
 }
 
-const getVc = (guildId) => data[guildId]?.vc || null;
-
-function setVc(guildId, channelId) {
-  data[guildId] = { ...(data[guildId] || {}), vc: String(channelId) };
-  save();
+// Store khusus satu bot (data bot lain tidak ikut tersentuh)
+function forBot(botId) {
+  const bucket = () => (data[botId] ||= {});
+  return {
+    getVc: (guildId) => data[botId]?.[guildId]?.vc || null,
+    setVc(guildId, channelId) {
+      bucket()[guildId] = { vc: String(channelId) };
+      save();
+    },
+    clearVc(guildId) {
+      if (!data[botId]?.[guildId]) return;
+      delete data[botId][guildId];
+      save();
+    },
+    allVc: () => Object.entries(data[botId] || {}).filter(([, v]) => v.vc).map(([guildId, v]) => ({ guildId, channelId: v.vc })),
+  };
 }
 
-function clearVc(guildId) {
-  if (!data[guildId]) return;
-  delete data[guildId];
-  save();
-}
-
-const allVc = () => Object.entries(data).filter(([, v]) => v.vc).map(([guildId, v]) => ({ guildId, channelId: v.vc }));
-
-module.exports = { getVc, setVc, clearVc, allVc };
+module.exports = { forBot };
