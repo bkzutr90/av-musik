@@ -1,0 +1,52 @@
+server:
+  port: 2333
+  address: 0.0.0.0
+lavalink:
+  plugins:
+    # Snapshot (belum rilis resmi) yang memperbaiki playback YouTube SABR-only.
+    # Kalau sudah ada rilis resmi 1.18.3+ di https://github.com/lavalink-devs/youtube-source/releases,
+    # ganti ke versi itu dan set snapshot: false.
+    - dependency: "dev.lavalink.youtube:youtube-plugin:f45bbb7aebfcbc1c553769e04af6cd43afa8b7c3"
+      snapshot: true
+  server:
+    password: "bkzutr9090"   # samakan dengan LAVALINK_PASSWORD di bot
+    sources:
+      youtube: false              # dimatikan, diganti plugin youtube-source
+      bandcamp: true
+      soundcloud: true
+      twitch: true
+      vimeo: true
+      http: true
+      local: false
+    bufferDurationMs: 400
+    frameBufferDurationMs: 5000
+    playerUpdateInterval: 5
+    gc-warnings: true
+plugins:
+  youtube:
+    enabled: true
+    allowSearch: true
+    allowDirectVideoIds: true
+    allowDirectPlaylistIds: true
+    clients:
+      - MUSIC
+      - WEB
+      - TVHTML5_SIMPLY
+      - TV
+      - MWEB
+      - ANDROID_VR
+    # Server cipher publik (tanpa password) untuk membuka signature YouTube.
+    remoteCipher:
+      url: "https://cipher.kikkia.dev/"
+      userAgent: "vdp-ranked"
+    # Login OAuth (akun Google cadangan). Token dibaca dari variabel YOUTUBE_REFRESH_TOKEN di Railway
+    # (service lavalink), jadi tidak ikut tersimpan di GitHub.
+    oauth:
+      enabled: true
+      refreshToken: "${YOUTUBE_REFRESH_TOKEN}"
+      skipInitialization: true
+logging:
+  level:
+    root: INFO
+    lavalink: INFO
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
